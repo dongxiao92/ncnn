@@ -191,6 +191,45 @@ int cpu_support_arm_asimdhp()
 #endif
 }
 
+static int get_cpuid(std::vector<int>cpuids, const int cpu_count)
+{
+	cpuids.reserve(cpu_count);
+#ifdef __ANDROID__
+    // get online cpu id from /proc/cpuinfo
+    FILE* fp = fopen("/proc/cpuinfo", "rb");
+    if (!fp)
+        return 1;
+
+	int idx = 0;
+    char line[1024];
+    while (!feof(fp))
+    {
+        char* s = fgets(line, 1024, fp);
+        if (!s)
+            break;
+
+        if (memcmp(line, "processor", 9) == 0)
+        {
+            char* sub_str = NULL;
+			sub_str = strok(line, ":");
+			sub_str = strok(NULL, "\n");
+			int id = atoi(sub_str);
+			if (id < 0)
+				return 2;
+			fprintf(stderr, "cpuid[%d]=%d\n", idx++, id);
+			cpuids.push_back(id);
+        }
+    }
+
+    fclose(fp);
+#else
+	// we donot know how to get online cpu ids. Just fill ids with indices.
+	for(int i=0; i<cpu_count; i++)
+		cpuids.push_back(i);
+#endif
+	return 0;
+}
+
 static int get_cpucount()
 {
 #ifdef __ANDROID__
@@ -326,6 +365,9 @@ typedef struct
     for (int i=0; i<(int)cpuids.size(); i++)
     {
         CPU_SET(cpuids[i], &mask);
+#ifdef DEBUG
+		fprintf(stderr, "thread:%d bind to:%d\n", pid, cpuids[i]);
+#endif
     }
 
     int syscallret = syscall(__NR_sched_setaffinity, pid, sizeof(mask), &mask);
@@ -352,11 +394,10 @@ static int sort_cpuid_by_max_frequency(std::vector<int>& cpuids, int* little_clu
 
     for (int i=0; i<cpu_count; i++)
     {
-        int max_freq_khz = get_max_freq_khz(i);
+        int max_freq_khz = get_max_freq_khz(cpuids[i]);
 
 //         printf("%d max freq = %d khz\n", i, max_freq_khz);
 
-        cpuids[i] = i;
         cpu_max_freq_khz[i] = max_freq_khz;
     }
 
@@ -413,15 +454,16 @@ int set_cpu_powersave(int powersave)
 
     if (sorted_cpuids.empty())
     {
-        // 0 ~ g_cpucount
         sorted_cpuids.resize(g_cpucount);
-        for (int i=0; i<g_cpucount; i++)
-        {
-            sorted_cpuids[i] = i;
-        }
+		if (get_cpuid(sorted_cpuids, g_cpucount) !=0)
+		{
+			fprintf(stderr, "fail to get cpuids\n");
+			return -2;
+		}
 
         // descent sort by max frequency
         sort_cpuid_by_max_frequency(sorted_cpuids, &little_cluster_offset);
+
     }
 
     if (little_cluster_offset == 0 && powersave != 0)
@@ -452,6 +494,9 @@ int set_cpu_powersave(int powersave)
 
 #ifdef _OPENMP
     // set affinity for each thread
+#ifdef DEBUG
+    fprintf(stderr, "total cpu number:%d, available cpu number:%d\n", g_cpucount, cpuids.size());
+#endif
     int num_threads = cpuids.size();
     omp_set_num_threads(num_threads);
     std::vector<int> ssarets(num_threads, 0);
