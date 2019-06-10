@@ -321,6 +321,7 @@ static bool read_proto_from_binary(const char* filepath, google::protobuf::Messa
 
 int main(int argc, char** argv)
 {
+    //default quantize_level is 0, which means no quantization.
     if (!(argc == 3 || argc == 5 || argc == 6 || argc == 7))
     {
         fprintf(stderr, "Usage: %s [caffeproto] [caffemodel] [ncnnproto] [ncnnbin] [quantizelevel] [int8scaletable]\n", argv[0]);

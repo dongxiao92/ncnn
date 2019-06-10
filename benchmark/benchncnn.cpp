@@ -62,6 +62,10 @@ public:
         {
             Layer* layer = layers[i];
 
+	    // each layer implements its own load_model method to get its values.
+	    // They will delegate the real loading work to a ModelBin object by calling its 'load' method
+	    // with the required weight's size/shape as arguments.
+	    // The ModelBinFromEmpty just ignores loading real weights and return a Mat with specified size.
             int lret = layer->load_model(mb);
             if (lret != 0)
             {
