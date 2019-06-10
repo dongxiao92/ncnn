@@ -59,6 +59,8 @@ else()
         endif()
 
         add_definitions(-ffast-math)
+	else()
+		add_definitions(-g)
     endif()
 
     if(PI3)
