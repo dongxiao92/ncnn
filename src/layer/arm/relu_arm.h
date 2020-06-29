@@ -22,8 +22,13 @@ namespace ncnn {
 class ReLU_arm : virtual public ReLU
 {
 public:
+    ReLU_arm();
+
     virtual int forward_inplace(Mat& bottom_top_blob, const Option& opt) const;
-    virtual int forward_inplace_int8(Mat& bottom_top_blob, const Option& opt) const;
+
+protected:
+    int forward_inplace_bf16s(Mat& bottom_top_blob, const Option& opt) const;
+    int forward_inplace_int8_neon(Mat& bottom_top_blob, const Option& opt) const;
 };
 
 } // namespace ncnn

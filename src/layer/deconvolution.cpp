@@ -13,8 +13,10 @@
 // specific language governing permissions and limitations under the License.
 
 #include "deconvolution.h"
-#include <algorithm>
+
 #include "layer_type.h"
+
+#include <algorithm>
 
 namespace ncnn {
 
@@ -35,8 +37,14 @@ int Deconvolution::load_param(const ParamDict& pd)
     dilation_h = pd.get(12, dilation_w);
     stride_w = pd.get(3, 1);
     stride_h = pd.get(13, stride_w);
-    pad_w = pd.get(4, 0);
-    pad_h = pd.get(14, pad_w);
+    pad_left = pd.get(4, 0);
+    pad_right = pd.get(15, pad_left);
+    pad_top = pd.get(14, pad_left);
+    pad_bottom = pd.get(16, pad_top);
+    output_pad_right = pd.get(18, 0);
+    output_pad_bottom = pd.get(19, output_pad_right);
+    output_w = pd.get(20, 0);
+    output_h = pd.get(21, output_w);
     bias_term = pd.get(5, 0);
     weight_data_size = pd.get(6, 0);
     activation_type = pd.get(9, 0);
@@ -71,7 +79,7 @@ int Deconvolution::forward(const Mat& bottom_blob, Mat& top_blob, const Option& 
     int channels = bottom_blob.c;
     size_t elemsize = bottom_blob.elemsize;
 
-//     fprintf(stderr, "Deconvolution input %d x %d  pad = %d %d  ksize=%d %d  stride=%d %d\n", w, h, pad_w, pad_h, kernel_w, kernel_h, stride_w, stride_h);
+    //     NCNN_LOGE("Deconvolution input %d x %d  pad = %d %d  ksize=%d %d  stride=%d %d", w, h, pad_w, pad_h, kernel_w, kernel_h, stride_w, stride_h);
 
     const int kernel_extent_w = dilation_w * (kernel_w - 1) + 1;
     const int kernel_extent_h = dilation_h * (kernel_h - 1) + 1;
@@ -80,19 +88,17 @@ int Deconvolution::forward(const Mat& bottom_blob, Mat& top_blob, const Option& 
     int outh = (h - 1) * stride_h + kernel_extent_h;
 
     Mat top_blob_bordered;
-    if (pad_w > 0 || pad_h > 0)
+    if (pad_left > 0 || pad_right > 0 || pad_top > 0 || pad_bottom > 0 || output_pad_right > 0 || output_pad_bottom > 0 || (output_w > 0 && output_h > 0))
     {
         top_blob_bordered.create(outw, outh, num_output, elemsize, opt.workspace_allocator);
-        if (top_blob_bordered.empty())
-            return -100;
     }
     else
     {
         top_blob_bordered = top_blob;
         top_blob_bordered.create(outw, outh, num_output, elemsize, opt.blob_allocator);
-        if (top_blob_bordered.empty())
-            return -100;
     }
+    if (top_blob_bordered.empty())
+        return -100;
 
     const int maxk = kernel_w * kernel_h;
 
@@ -117,7 +123,7 @@ int Deconvolution::forward(const Mat& bottom_blob, Mat& top_blob, const Option& 
 
     // num_output
     #pragma omp parallel for num_threads(opt.num_threads)
-    for (int p=0; p<num_output; p++)
+    for (int p = 0; p < num_output; p++)
     {
         Mat out = top_blob_bordered.channel(p);
 
@@ -129,12 +135,12 @@ int Deconvolution::forward(const Mat& bottom_blob, Mat& top_blob, const Option& 
         {
             for (int j = 0; j < w; j++)
             {
-                float* outptr = out.row(i*stride_h) + j*stride_w;
+                float* outptr = out.row(i * stride_h) + j * stride_w;
 
                 const float* kptr = (const float*)weight_data + maxk * channels * p;
 
                 // channels
-                for (int q=0; q<channels; q++)
+                for (int q = 0; q < channels; q++)
                 {
                     const Mat m = bottom_blob.channel(q);
                     float val = *(m.row(i) + j);
@@ -142,7 +148,7 @@ int Deconvolution::forward(const Mat& bottom_blob, Mat& top_blob, const Option& 
                     for (int k = 0; k < maxk; k++)
                     {
                         float w = kptr[k];
-                        outptr[ space_ofs[k] ] += val * w;
+                        outptr[space_ofs[k]] += val * w;
                     }
 
                     kptr += maxk;
@@ -193,14 +199,55 @@ int Deconvolution::forward(const Mat& bottom_blob, Mat& top_blob, const Option& 
 
             for (int i = 0; i < size; i++)
             {
-                outptr[i] = 1.f / (1.f + exp(-outptr[i]));
+                outptr[i] = static_cast<float>(1.f / (1.f + exp(-outptr[i])));
             }
         }
     }
 
-    if (pad_w > 0 || pad_h > 0)
+    if (pad_left > 0 || pad_right > 0 || pad_top > 0 || pad_bottom > 0)
     {
-        copy_cut_border(top_blob_bordered, top_blob, pad_h, pad_h, pad_w, pad_w, opt.blob_allocator, opt.num_threads);
+        Mat top_blob_bordered_adj = top_blob_bordered;
+        if (output_pad_right > 0 || output_pad_bottom > 0)
+        {
+            Option opt_b = opt;
+            opt_b.blob_allocator = opt.workspace_allocator;
+            copy_make_border(top_blob_bordered, top_blob_bordered_adj, 0, output_pad_bottom, 0, output_pad_right, BORDER_CONSTANT, 0.f, opt_b);
+            if (top_blob_bordered_adj.empty())
+                return -100;
+        }
+
+        copy_cut_border(top_blob_bordered_adj, top_blob, pad_top, pad_bottom, pad_left, pad_right, opt);
+        if (top_blob.empty())
+            return -100;
+
+        outw = top_blob.w;
+        outh = top_blob.h;
+    }
+    else if (output_w > 0 && output_h > 0)
+    {
+        Mat top_blob_bordered_adj = top_blob_bordered;
+        if (output_pad_right > 0 || output_pad_bottom > 0)
+        {
+            Option opt_b = opt;
+            opt_b.blob_allocator = opt.workspace_allocator;
+            copy_make_border(top_blob_bordered, top_blob_bordered_adj, 0, output_pad_bottom, 0, output_pad_right, BORDER_CONSTANT, 0.f, opt_b);
+            if (top_blob_bordered_adj.empty())
+                return -100;
+        }
+
+        int wcut = top_blob_bordered_adj.w - output_w;
+        int hcut = top_blob_bordered_adj.h - output_h;
+
+        if (pad_left == -233 || pad_right == -233 || pad_top == -233 || pad_bottom == -233)
+        {
+            // onnx padding=SAME_UPPER
+            copy_cut_border(top_blob_bordered_adj, top_blob, hcut / 2, hcut - hcut / 2, wcut / 2, wcut - wcut / 2, opt);
+        }
+        else if (pad_left == -234 || pad_right == -234 || pad_top == -234 || pad_bottom == -234)
+        {
+            // onnx padding=SAME_LOWER
+            copy_cut_border(top_blob_bordered_adj, top_blob, hcut - hcut / 2, hcut / 2, wcut - wcut / 2, wcut / 2, opt);
+        }
         if (top_blob.empty())
             return -100;
 
@@ -209,7 +256,16 @@ int Deconvolution::forward(const Mat& bottom_blob, Mat& top_blob, const Option& 
     }
     else
     {
-        top_blob = top_blob_bordered;
+        if (output_pad_right > 0 || output_pad_bottom > 0)
+        {
+            copy_make_border(top_blob_bordered, top_blob, 0, output_pad_bottom, 0, output_pad_right, BORDER_CONSTANT, 0.f, opt);
+            if (top_blob.empty())
+                return -100;
+        }
+        else
+        {
+            top_blob = top_blob_bordered;
+        }
     }
 
     return 0;
